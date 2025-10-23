@@ -1,13 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
 
 export default async function handler(req, res) {
-  console.log("🔹 Início da função distribuidor", {
-    method: req.method,
-    body: req.body,
-  });
+  console.log("🔹 Início da função distribuidor", { method: req.method });
 
   if (req.method !== "POST") {
-    console.warn("⚠️ Método não permitido:", req.method);
     return res.status(405).json({ error: "Método não permitido" });
   }
 
@@ -17,20 +13,24 @@ export default async function handler(req, res) {
     const supabaseKey = process.env.SUPABASE_KEY;
 
     if (!supabaseUrl || !supabaseKey) {
-      console.error("❌ Variáveis de ambiente do Supabase faltando!");
-      return res
-        .status(500)
-        .json({ error: "Configuração do Supabase ausente" });
+      return res.status(500).json({ error: "Configuração do Supabase ausente" });
     }
 
     const supabase = createClient(supabaseUrl, supabaseKey);
-    console.log("✅ Cliente Supabase criado com sucesso.");
 
-    const { phone_number, nome } = req.body;
-    console.log("📞 Dados recebidos:", { phone_number, nome });
+    // Garantir que o body seja lido corretamente
+    let body = req.body;
+    if (!body || Object.keys(body).length === 0) {
+      try {
+        body = JSON.parse(req.body);
+      } catch (err) {
+        return res.status(400).json({ error: "Body inválido" });
+      }
+    }
+
+    const { phone_number, nome } = body;
 
     if (!phone_number) {
-      console.error("❌ Número de telefone não informado!");
       return res.status(400).json({ error: "Número de telefone obrigatório" });
     }
 
@@ -41,14 +41,9 @@ export default async function handler(req, res) {
       .eq("phone_number", phone_number)
       .single();
 
-    if (existingError && existingError.code !== "PGRST116") {
-      // PGRST116 = "No rows found"
-      console.error("⚠️ Erro ao consultar cliente:", existingError);
-      throw existingError;
-    }
+    if (existingError && existingError.code !== "PGRST116") throw existingError;
 
     if (existing) {
-      console.log("👤 Cliente antigo identificado:", existing.nome);
       return res.status(200).json({
         tipo: "antigo",
         vendedor_id: existing.vendedor_id,
@@ -57,38 +52,23 @@ export default async function handler(req, res) {
     }
 
     // 2️⃣ Busca todos os vendedores
-    const { data: vendedores, error: vendError } = await supabase
+    const { data: vendedores } = await supabase
       .from("vendedores")
       .select("*")
       .order("id", { ascending: true });
 
-    if (vendError) {
-      console.error("❌ Erro ao buscar vendedores:", vendError);
-      throw vendError;
-    }
-
-    console.log("👥 Vendedores carregados:", vendedores.map((v) => v.nome));
-
-    // 3️⃣ Busca total de clientes para calcular distribuição
-    const { data: totalClientes } = await supabase
-      .from("clientes")
-      .select("vendedor_id");
-
-    const contagem = vendedores.map((v) => ({
+    // 3️⃣ Conta clientes por vendedor
+    const { data: totalClientes } = await supabase.from("clientes").select("vendedor_id");
+    const contagem = vendedores.map(v => ({
       ...v,
-      total:
-        totalClientes?.filter((c) => c.vendedor_id === v.id).length || 0,
+      total: totalClientes.filter(c => c.vendedor_id === v.id).length,
     }));
 
-    console.log("📊 Distribuição atual:", contagem);
-
-    // 4️⃣ Escolhe o vendedor com menos clientes
+    // 4️⃣ Escolhe vendedor com menos clientes
     const vendedorEscolhido = contagem.sort((a, b) => a.total - b.total)[0];
 
-    console.log("🎯 Vendedor selecionado:", vendedorEscolhido.nome);
-
     // 5️⃣ Insere novo cliente
-    const { data: novoCliente, error: insertError } = await supabase
+    const { data: novoCliente } = await supabase
       .from("clientes")
       .insert([
         {
@@ -98,13 +78,6 @@ export default async function handler(req, res) {
         },
       ])
       .select();
-
-    if (insertError) {
-      console.error("❌ Erro ao inserir novo cliente:", insertError);
-      throw insertError;
-    }
-
-    console.log("✅ Novo cliente registrado:", novoCliente);
 
     return res.status(200).json({
       tipo: "novo",
