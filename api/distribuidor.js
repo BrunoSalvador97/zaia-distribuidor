@@ -1,9 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 
 export default async function handler(req, res) {
-  console.log("🔹 Início da função distribuidor");
-  console.log("req.method:", req.method);
-  console.log("req.headers:", req.headers);
+  console.log("🔹 Início da função distribuidor", { method: req.method });
 
   if (req.method !== "POST") {
     console.warn("⚠️ Método não permitido:", req.method);
@@ -11,19 +9,19 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Configuração Supabase
+    // Cria cliente Supabase
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_KEY;
 
     if (!supabaseUrl || !supabaseKey) {
-      console.error("❌ Variáveis de ambiente do Supabase ausentes!");
+      console.error("❌ Variáveis de ambiente do Supabase faltando!");
       return res.status(500).json({ error: "Configuração do Supabase ausente" });
     }
 
     const supabase = createClient(supabaseUrl, supabaseKey);
     console.log("✅ Cliente Supabase criado com sucesso.");
 
-    // Garantir que o body seja lido corretamente
+    // Lê o body corretamente
     let body = req.body;
     if (!body || Object.keys(body).length === 0) {
       try {
@@ -34,16 +32,15 @@ export default async function handler(req, res) {
       }
     }
 
-    console.log("📦 Body recebido:", body);
-
     const { phone_number, nome } = body;
+    console.log("📞 Dados recebidos:", { phone_number, nome });
 
     if (!phone_number) {
       console.error("❌ Número de telefone não informado!");
       return res.status(400).json({ error: "Número de telefone obrigatório" });
     }
 
-    // 1️⃣ Verifica se cliente já existe
+    // 1️⃣ Verifica se o cliente já existe
     const { data: existing, error: existingError } = await supabase
       .from("clientes")
       .select("*")
@@ -60,12 +57,9 @@ export default async function handler(req, res) {
       return res.status(200).json({
         tipo: "antigo",
         vendedor_id: existing.vendedor_id,
-        vendedor_nome: existing.nome_vendedor,
         mensagem: "Cliente antigo redirecionado ao vendedor original",
       });
     }
-
-    console.log("🆕 Cliente novo, procedendo com distribuição.");
 
     // 2️⃣ Busca todos os vendedores
     const { data: vendedores, error: vendError } = await supabase
@@ -78,16 +72,19 @@ export default async function handler(req, res) {
       throw vendError;
     }
 
-    console.log("👥 Vendedores disponíveis:", vendedores.map(v => v.nome));
+    console.log("👥 Vendedores carregados:", vendedores.map(v => v.nome));
 
     // 3️⃣ Conta clientes por vendedor
-    const { data: totalClientes } = await supabase.from("clientes").select("vendedor_id");
+    const { data: totalClientes } = await supabase
+      .from("clientes")
+      .select("vendedor_id");
+
     const contagem = vendedores.map(v => ({
       ...v,
       total: totalClientes.filter(c => c.vendedor_id === v.id).length,
     }));
 
-    console.log("📊 Distribuição atual de clientes:", contagem);
+    console.log("📊 Distribuição atual:", contagem);
 
     // 4️⃣ Escolhe vendedor com menos clientes
     const vendedorEscolhido = contagem.sort((a, b) => a.total - b.total)[0];
@@ -96,13 +93,13 @@ export default async function handler(req, res) {
     // 5️⃣ Insere novo cliente
     const { data: novoCliente, error: insertError } = await supabase
       .from("clientes")
-      .insert([{
-        nome: nome || "Sem nome",
-        phone_number,
-        vendedor_id: vendedorEscolhido.id,
-        nome_vendedor: vendedorEscolhido.nome,
-        telefone_vendedor: vendedorEscolhido.telefone,
-      }])
+      .insert([
+        {
+          nome: nome || "Sem nome",
+          phone_number,
+          vendedor_id: vendedorEscolhido.id,
+        },
+      ])
       .select();
 
     if (insertError) {
