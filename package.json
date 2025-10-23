@@ -9,5 +9,8 @@
     "start": "node index.js"
   },
   "author": "Bruno Alexander",
-  "license": "ISC"
+  "license": "ISC",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.76.1"
+  }
 }
