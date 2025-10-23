@@ -1,0 +1,12 @@
+{
+  "name": "meu-projeto",
+  "version": "1.0.0",
+  "description": "Projeto Zaia distribuidor",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vercel dev",
+    "start": "node index.js"
+  },
+  "author": "Bruno Alexander",
+  "license": "ISC"
+}
