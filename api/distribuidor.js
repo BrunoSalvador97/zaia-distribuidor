@@ -4,7 +4,6 @@ export default async function handler(req, res) {
   console.log("🔹 Início da função distribuidor", { method: req.method });
 
   if (req.method !== "POST") {
-    console.warn("⚠️ Método não permitido:", req.method);
     return res.status(405).json({ error: "Método não permitido" });
   }
 
@@ -19,21 +18,19 @@ export default async function handler(req, res) {
     }
 
     const supabase = createClient(supabaseUrl, supabaseKey);
-    console.log("✅ Cliente Supabase criado com sucesso.");
 
-    // Lê o body corretamente
+    // Garantir que o body seja lido corretamente
     let body = req.body;
     if (!body || Object.keys(body).length === 0) {
       try {
         body = JSON.parse(req.body);
       } catch (err) {
-        console.error("❌ Body inválido:", req.body);
+        console.error("❌ Body inválido", req.body);
         return res.status(400).json({ error: "Body inválido" });
       }
     }
 
     const { phone_number, nome } = body;
-    console.log("📞 Dados recebidos:", { phone_number, nome });
 
     if (!phone_number) {
       console.error("❌ Número de telefone não informado!");
@@ -43,52 +40,48 @@ export default async function handler(req, res) {
     // 1️⃣ Verifica se o cliente já existe
     const { data: existing, error: existingError } = await supabase
       .from("clientes")
-      .select("*")
+      .select("*, vendedores(nome) as vendedor")
       .eq("phone_number", phone_number)
       .single();
 
-    if (existingError && existingError.code !== "PGRST116") {
-      console.error("⚠️ Erro ao consultar cliente:", existingError);
-      throw existingError;
-    }
+    if (existingError && existingError.code !== "PGRST116") throw existingError;
 
     if (existing) {
-      console.log("👤 Cliente antigo identificado:", existing.nome);
+      console.log(
+        "👤 Cliente antigo identificado:",
+        { nome_cliente: existing.nome, vendedor_id: existing.vendedor_id }
+      );
+
+      // Buscar nome do vendedor para log e resposta
+      const { data: vendedorData } = await supabase
+        .from("vendedores")
+        .select("nome")
+        .eq("id", existing.vendedor_id)
+        .single();
+
       return res.status(200).json({
         tipo: "antigo",
         vendedor_id: existing.vendedor_id,
-        mensagem: "Cliente antigo redirecionado ao vendedor original",
+        vendedor_nome: vendedorData?.nome || "Desconhecido",
+        mensagem: `Cliente antigo redirecionado para ${vendedorData?.nome || "vendedor"}`,
       });
     }
 
     // 2️⃣ Busca todos os vendedores
-    const { data: vendedores, error: vendError } = await supabase
+    const { data: vendedores } = await supabase
       .from("vendedores")
       .select("*")
       .order("id", { ascending: true });
 
-    if (vendError) {
-      console.error("❌ Erro ao buscar vendedores:", vendError);
-      throw vendError;
-    }
-
-    console.log("👥 Vendedores carregados:", vendedores.map(v => v.nome));
-
     // 3️⃣ Conta clientes por vendedor
-    const { data: totalClientes } = await supabase
-      .from("clientes")
-      .select("vendedor_id");
-
+    const { data: totalClientes } = await supabase.from("clientes").select("vendedor_id");
     const contagem = vendedores.map(v => ({
       ...v,
       total: totalClientes.filter(c => c.vendedor_id === v.id).length,
     }));
 
-    console.log("📊 Distribuição atual:", contagem);
-
     // 4️⃣ Escolhe vendedor com menos clientes
     const vendedorEscolhido = contagem.sort((a, b) => a.total - b.total)[0];
-    console.log("🎯 Vendedor selecionado:", vendedorEscolhido.nome);
 
     // 5️⃣ Insere novo cliente
     const { data: novoCliente, error: insertError } = await supabase
@@ -97,17 +90,18 @@ export default async function handler(req, res) {
         {
           nome: nome || "Sem nome",
           phone_number,
-          vendedor_id: vendedorEscolhido.id,
+          vendedor_id: vendedorEscolhido.id
         },
       ])
       .select();
 
-    if (insertError) {
-      console.error("❌ Erro ao inserir novo cliente:", insertError);
-      throw insertError;
-    }
+    if (insertError) throw insertError;
 
-    console.log("✅ Novo cliente registrado:", novoCliente);
+    console.log("✅ Novo cliente registrado:", {
+      nome_cliente: nome,
+      vendedor_id: vendedorEscolhido.id,
+      vendedor_nome: vendedorEscolhido.nome,
+    });
 
     return res.status(200).json({
       tipo: "novo",
