@@ -1,7 +1,7 @@
-const { createClient } = require("@supabase/supabase-js");
-const fetch = require("node-fetch"); // Ajustado para CommonJS
+import { createClient } from "@supabase/supabase-js";
+import fetch from "node-fetch"; // fetch moderno para Node 18+
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   console.log("🔹 Início da função distribuidor", { method: req.method });
 
   if (req.method !== "POST") {
@@ -130,5 +130,4 @@ module.exports = async function handler(req, res) {
     console.error("🔥 Erro geral no distribuidor:", err);
     return res.status(500).json({ error: err.message });
   }
-};
-// Deploy Vercel atualizado - test commit
+}
