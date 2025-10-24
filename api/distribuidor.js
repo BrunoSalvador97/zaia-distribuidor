@@ -1,5 +1,4 @@
 import { createClient } from "@supabase/supabase-js";
-import fetch from "node-fetch"; // fetch moderno para Node 18+
 
 export default async function handler(req, res) {
   console.log("🔹 Início da função distribuidor", { method: req.method });
@@ -25,7 +24,7 @@ export default async function handler(req, res) {
     if (!body || Object.keys(body).length === 0) {
       try {
         body = JSON.parse(req.body);
-      } catch (err) {
+      } catch {
         console.error("❌ Body inválido", req.body);
         return res.status(400).json({ error: "Body inválido" });
       }
@@ -46,7 +45,6 @@ export default async function handler(req, res) {
 
     if (existing) {
       console.log("👤 Cliente antigo identificado:", { nome_cliente: existing.nome, vendedor_id: existing.vendedor_id });
-
       return res.status(200).json({
         tipo: "antigo",
         vendedor_id: existing.vendedor_id,
@@ -94,15 +92,12 @@ export default async function handler(req, res) {
       etiqueta_whatsapp: vendedorEscolhido.etiqueta_whatsapp,
     });
 
-    // 9️⃣ Aplica etiqueta WhatsApp via API Zaia
+    // 9️⃣ Aplica etiqueta WhatsApp via API Zaia (fetch nativo)
     try {
-      const zaiaApiUrl = process.env.ZAIA_API_URL;
-      const zaiaToken = process.env.ZAIA_TOKEN;
-
-      const response = await fetch(`${zaiaApiUrl}/contacts/tag`, {
+      const response = await fetch(`${process.env.ZAIA_API_URL}/contacts/tag`, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${zaiaToken}`,
+          "Authorization": `Bearer ${process.env.ZAIA_TOKEN}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
