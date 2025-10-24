@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import fetch from "node-fetch";
 
 export default async function handler(req, res) {
   console.log("🔹 Início da função distribuidor", { method: req.method });
@@ -8,7 +9,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Cria cliente Supabase
+    // 1️⃣ Cria cliente Supabase
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_KEY;
 
@@ -19,7 +20,7 @@ export default async function handler(req, res) {
 
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Garantir que o body seja lido corretamente
+    // 2️⃣ Lê o body corretamente
     let body = req.body;
     if (!body || Object.keys(body).length === 0) {
       try {
@@ -31,68 +32,57 @@ export default async function handler(req, res) {
     }
 
     const { phone_number, nome } = body;
-
     if (!phone_number) {
       console.error("❌ Número de telefone não informado!");
       return res.status(400).json({ error: "Número de telefone obrigatório" });
     }
 
-    // 1️⃣ Verifica se o cliente já existe
-    const { data: existing, error: existingError } = await supabase
+    // 3️⃣ Verifica se o cliente já existe
+    const { data: existing } = await supabase
       .from("clientes")
-      .select("*, vendedores(nome) as vendedor")
+      .select("*, vendedores(nome, etiqueta_whatsapp) as vendedor")
       .eq("phone_number", phone_number)
       .single();
 
-    if (existingError && existingError.code !== "PGRST116") throw existingError;
-
     if (existing) {
-      console.log(
-        "👤 Cliente antigo identificado:",
-        { nome_cliente: existing.nome, vendedor_id: existing.vendedor_id }
-      );
-
-      // Buscar nome do vendedor para log e resposta
-      const { data: vendedorData } = await supabase
-        .from("vendedores")
-        .select("nome")
-        .eq("id", existing.vendedor_id)
-        .single();
+      console.log("👤 Cliente antigo identificado:", { nome_cliente: existing.nome, vendedor_id: existing.vendedor_id });
 
       return res.status(200).json({
         tipo: "antigo",
         vendedor_id: existing.vendedor_id,
-        vendedor_nome: vendedorData?.nome || "Desconhecido",
-        mensagem: `Cliente antigo redirecionado para ${vendedorData?.nome || "vendedor"}`,
+        vendedor_nome: existing.vendedor?.nome || "Desconhecido",
+        mensagem: `Cliente antigo redirecionado para ${existing.vendedor?.nome || "vendedor"}`,
       });
     }
 
-    // 2️⃣ Busca todos os vendedores
+    // 4️⃣ Busca todos os vendedores ativos
     const { data: vendedores } = await supabase
       .from("vendedores")
       .select("*")
+      .eq("ativo", true)
       .order("id", { ascending: true });
 
-    // 3️⃣ Conta clientes por vendedor
-    const { data: totalClientes } = await supabase.from("clientes").select("vendedor_id");
-    const contagem = vendedores.map(v => ({
-      ...v,
-      total: totalClientes.filter(c => c.vendedor_id === v.id).length,
-    }));
+    if (!vendedores || vendedores.length === 0) {
+      return res.status(500).json({ error: "Nenhum vendedor ativo encontrado" });
+    }
 
-    // 4️⃣ Escolhe vendedor com menos clientes
-    const vendedorEscolhido = contagem.sort((a, b) => a.total - b.total)[0];
+    // 5️⃣ Pega índice da roleta
+    const { data: config } = await supabase.from("config").select("*").eq("id", 1).single();
+    let index = config?.ultimo_vendedor_index ?? 0;
 
-    // 5️⃣ Insere novo cliente
+    // 6️⃣ Escolhe vendedor da roleta
+    const vendedorEscolhido = vendedores[index % vendedores.length];
+
+    // 7️⃣ Atualiza índice da roleta
+    await supabase.from("config").update({
+      ultimo_vendedor_index: (index + 1) % vendedores.length,
+      atualizado_em: new Date()
+    }).eq("id", 1);
+
+    // 8️⃣ Insere novo cliente
     const { data: novoCliente, error: insertError } = await supabase
       .from("clientes")
-      .insert([
-        {
-          nome: nome || "Sem nome",
-          phone_number,
-          vendedor_id: vendedorEscolhido.id
-        },
-      ])
+      .insert([{ nome: nome || "Sem nome", phone_number, vendedor_id: vendedorEscolhido.id }])
       .select();
 
     if (insertError) throw insertError;
@@ -101,13 +91,39 @@ export default async function handler(req, res) {
       nome_cliente: nome,
       vendedor_id: vendedorEscolhido.id,
       vendedor_nome: vendedorEscolhido.nome,
+      etiqueta_whatsapp: vendedorEscolhido.etiqueta_whatsapp,
     });
 
+    // 9️⃣ Aplica etiqueta WhatsApp via API Zaia
+    try {
+      const zaiaApiUrl = process.env.ZAIA_API_URL;
+      const zaiaToken = process.env.ZAIA_TOKEN;
+
+      const response = await fetch(`${zaiaApiUrl}/contacts/tag`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${zaiaToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          phone: phone_number,
+          tag: vendedorEscolhido.etiqueta_whatsapp
+        })
+      });
+
+      const result = await response.json();
+      console.log("📌 Etiqueta aplicada no WhatsApp:", result);
+    } catch (err) {
+      console.error("⚠️ Falha ao aplicar etiqueta no WhatsApp:", err);
+    }
+
+    // 10️⃣ Retorna sucesso
     return res.status(200).json({
       tipo: "novo",
       vendedor_id: vendedorEscolhido.id,
       vendedor_nome: vendedorEscolhido.nome,
-      mensagem: `Novo cliente atribuído a ${vendedorEscolhido.nome}`,
+      etiqueta_whatsapp: vendedorEscolhido.etiqueta_whatsapp,
+      mensagem: `Novo cliente atribuído a ${vendedorEscolhido.nome} e etiqueta aplicada`
     });
 
   } catch (err) {
