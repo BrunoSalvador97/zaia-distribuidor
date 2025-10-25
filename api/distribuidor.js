@@ -1,5 +1,12 @@
 import { createClient } from "@supabase/supabase-js";
-import fetch from "node-fetch"; // ✅ Import necessário para Node.js
+
+// Compatível Node 18+ ou versões antigas com node-fetch
+let fetchFunction;
+try {
+  fetchFunction = fetch; // Node 18+
+} catch {
+  fetchFunction = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+}
 
 export default async function handler(req, res) {
   console.log("🔹 Início da função distribuidor", { method: req.method });
@@ -13,7 +20,6 @@ export default async function handler(req, res) {
     const supabaseKey = process.env.SUPABASE_KEY;
 
     if (!supabaseUrl || !supabaseKey) {
-      console.error("❌ Variáveis de ambiente do Supabase faltando!");
       return res.status(500).json({ error: "Configuração do Supabase ausente" });
     }
 
@@ -22,15 +28,11 @@ export default async function handler(req, res) {
     // Lê body
     let body = req.body;
     if (!body || Object.keys(body).length === 0) {
-      try {
-        body = JSON.parse(req.body);
-      } catch {
-        console.error("❌ Body inválido", req.body);
-        return res.status(400).json({ error: "Body inválido" });
-      }
+      try { body = JSON.parse(req.body); } 
+      catch { return res.status(400).json({ error: "Body inválido" }); }
     }
 
-    const { phone_number, nome, empresa, cidade, tipo_midia, periodo, orcamento } = body;
+    const { phone_number, nome, empresa, cidade, tipo_midia, periodo, orcamento, mensagens } = body;
     if (!phone_number) return res.status(400).json({ error: "Número de telefone obrigatório" });
     if (!nome) return res.status(400).json({ error: "Nome do cliente obrigatório" });
     if (!empresa) return res.status(400).json({ error: "Nome da empresa obrigatório" });
@@ -43,7 +45,17 @@ export default async function handler(req, res) {
       .single();
 
     if (existing) {
-      console.log("👤 Cliente antigo identificado:", { nome_cliente: existing.nome, vendedor_id: existing.vendedor_id });
+      // Salva nova mensagem do lead, se enviada
+      if (mensagens && Array.isArray(mensagens)) {
+        for (let msg of mensagens) {
+          await supabase.from("mensagens_leads").insert([{
+            cliente_id: existing.id,
+            mensagem: msg.text,
+            origem: msg.origem || "cliente"
+          }]);
+        }
+      }
+
       return res.status(200).json({
         tipo: "antigo",
         vendedor_id: existing.vendedor_id,
@@ -65,7 +77,6 @@ export default async function handler(req, res) {
     const { data: config } = await supabase.from("config").select("*").eq("id", 1).single();
     let index = config?.ultimo_vendedor_index ?? 0;
 
-    // Escolhe vendedor da roleta
     const vendedorEscolhido = vendedores[index % vendedores.length];
 
     // Atualiza índice
@@ -78,25 +89,25 @@ export default async function handler(req, res) {
     const { data: novoCliente, error: insertError } = await supabase
       .from("clientes")
       .insert([{
-        nome,
-        empresa,
-        phone_number,
-        cidade,
-        tipo_midia,
-        periodo,
-        orcamento,
+        nome, empresa, phone_number, cidade, tipo_midia, periodo, orcamento,
         vendedor_id: vendedorEscolhido.id
       }])
       .select();
 
     if (insertError) throw insertError;
 
-    console.log("✅ Novo cliente registrado:", {
-      nome_cliente: nome,
-      vendedor_id: vendedorEscolhido.id,
-      vendedor_nome: vendedorEscolhido.nome,
-      etiqueta_whatsapp: vendedorEscolhido.etiqueta_whatsapp
-    });
+    const clienteId = novoCliente[0].id;
+
+    // Salva mensagens enviadas pelo lead (se houver)
+    if (mensagens && Array.isArray(mensagens)) {
+      for (let msg of mensagens) {
+        await supabase.from("mensagens_leads").insert([{
+          cliente_id: clienteId,
+          mensagem: msg.text,
+          origem: msg.origem || "cliente"
+        }]);
+      }
+    }
 
     // Monta mensagem resumida
     const mensagemResumo = `
@@ -114,31 +125,22 @@ Resumo da conversa:
 
     // Aplica etiqueta e envia mensagem via Zaia
     try {
-      // Aplica etiqueta
-      await fetch(`${process.env.ZAIA_API_URL}/contacts/tag`, {
+      await fetchFunction(`${process.env.ZAIA_API_URL}/contacts/tag`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${process.env.ZAIA_TOKEN}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          phone: phone_number,
-          tag: vendedorEscolhido.etiqueta_whatsapp
-        })
+        body: JSON.stringify({ phone: phone_number, tag: vendedorEscolhido.etiqueta_whatsapp })
       });
 
-      // Envia resumo ao vendedor
-      await fetch(`${process.env.ZAIA_API_URL}/messages/send`, {
+      await fetchFunction(`${process.env.ZAIA_API_URL}/messages/send`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${process.env.ZAIA_TOKEN}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          to: vendedorEscolhido.telefone || vendedorEscolhido.whatsapp,
-          type: "text",
-          text: mensagemResumo
-        })
+        body: JSON.stringify({ to: vendedorEscolhido.telefone || vendedorEscolhido.whatsapp, type: "text", text: mensagemResumo })
       });
 
       console.log("📌 Lead enviado com resumo padronizado ao vendedor");
