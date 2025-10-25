@@ -1,8 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
-import fetch from "node-fetch";
+import fetch from "node-fetch"; // ✅ Import necessário para Node.js
 
 export default async function handler(req, res) {
-  console.log("🔹 Início da função distribuidor (realtime)", { method: req.method });
+  console.log("🔹 Início da função distribuidor", { method: req.method });
 
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Método não permitido" });
@@ -11,12 +11,10 @@ export default async function handler(req, res) {
   try {
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_KEY;
-    const zaiaToken = process.env.ZAIA_TOKEN;
-    const zaiaApi = process.env.ZAIA_API_URL;
 
-    if (!supabaseUrl || !supabaseKey || !zaiaToken || !zaiaApi) {
-      console.error("❌ Variáveis de ambiente faltando!");
-      return res.status(500).json({ error: "Configuração ausente" });
+    if (!supabaseUrl || !supabaseKey) {
+      console.error("❌ Variáveis de ambiente do Supabase faltando!");
+      return res.status(500).json({ error: "Configuração do Supabase ausente" });
     }
 
     const supabase = createClient(supabaseUrl, supabaseKey);
@@ -32,21 +30,15 @@ export default async function handler(req, res) {
       }
     }
 
-    // Extrai informações do lead do body enviado pelo fluxo Zaia
-    const { usuario, empresa, localizacao, tipo_midia, periodo, orcamento } = body;
-    const phone_number = usuario?.telefone;
-    const nome = usuario?.nome;
-    const cidade = localizacao?.cidade || "Não informado";
+    const { phone_number, nome, empresa, cidade, tipo_midia, periodo, orcamento } = body;
+    if (!phone_number) return res.status(400).json({ error: "Número de telefone obrigatório" });
+    if (!nome) return res.status(400).json({ error: "Nome do cliente obrigatório" });
+    if (!empresa) return res.status(400).json({ error: "Nome da empresa obrigatório" });
 
-    if (!phone_number || !nome || !empresa) {
-      console.error("❌ Dados obrigatórios faltando!", { phone_number, nome, empresa });
-      return res.status(400).json({ error: "Dados obrigatórios faltando" });
-    }
-
-    // Verifica se o cliente já existe
+    // Verifica cliente existente
     const { data: existing } = await supabase
       .from("clientes")
-      .select("*, vendedores(nome, etiqueta_whatsapp, whatsapp) as vendedor")
+      .select("*, vendedores(nome, etiqueta_whatsapp, telefone) as vendedor")
       .eq("phone_number", phone_number)
       .single();
 
@@ -60,24 +52,23 @@ export default async function handler(req, res) {
       });
     }
 
-    // Busca todos os vendedores ativos
+    // Busca vendedores ativos
     const { data: vendedores } = await supabase
       .from("vendedores")
       .select("*")
       .eq("ativo", true)
       .order("id", { ascending: true });
 
-    if (!vendedores || vendedores.length === 0) {
-      return res.status(500).json({ error: "Nenhum vendedor ativo encontrado" });
-    }
+    if (!vendedores || vendedores.length === 0) return res.status(500).json({ error: "Nenhum vendedor ativo encontrado" });
 
-    // Pega índice da roleta
+    // Índice da roleta
     const { data: config } = await supabase.from("config").select("*").eq("id", 1).single();
     let index = config?.ultimo_vendedor_index ?? 0;
 
+    // Escolhe vendedor da roleta
     const vendedorEscolhido = vendedores[index % vendedores.length];
 
-    // Atualiza índice da roleta
+    // Atualiza índice
     await supabase.from("config").update({
       ultimo_vendedor_index: (index + 1) % vendedores.length,
       atualizado_em: new Date()
@@ -114,19 +105,20 @@ export default async function handler(req, res) {
 Nome: ${nome}
 Empresa: ${empresa}
 Resumo da conversa:
-- Cidade: ${cidade}
+- Cidade: ${cidade || "Não informado"}
 - Telefone: ${phone_number}
 - Tipo de mídia: ${tipo_midia || "Não informado"}
 - Período: ${periodo || "Não informado"}
 - Orçamento: ${orcamento || "Não informado"}
 `;
 
-    // Aplica etiqueta e envia mensagem
+    // Aplica etiqueta e envia mensagem via Zaia
     try {
-      await fetch(`${zaiaApi}/contacts/tag`, {
+      // Aplica etiqueta
+      await fetch(`${process.env.ZAIA_API_URL}/contacts/tag`, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${zaiaToken}`,
+          "Authorization": `Bearer ${process.env.ZAIA_TOKEN}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
@@ -135,14 +127,15 @@ Resumo da conversa:
         })
       });
 
-      await fetch(`${zaiaApi}/messages/send`, {
+      // Envia resumo ao vendedor
+      await fetch(`${process.env.ZAIA_API_URL}/messages/send`, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${zaiaToken}`,
+          "Authorization": `Bearer ${process.env.ZAIA_TOKEN}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          to: vendedorEscolhido.whatsapp || vendedorEscolhido.phone_number,
+          to: vendedorEscolhido.telefone || vendedorEscolhido.whatsapp,
           type: "text",
           text: mensagemResumo
         })
