@@ -26,9 +26,14 @@ export default async function handler(req, res) {
       .select(`
         id,
         nome,
+        empresa,
         phone_number,
-        vendedor_id,
+        cidade,
+        tipo_midia,
+        periodo,
+        orcamento,
         created_at,
+        vendedor_id,
         vendedores!inner(nome, etiqueta_whatsapp)
       `);
 
@@ -54,12 +59,26 @@ export default async function handler(req, res) {
       statsEtiquetas[etiquetaVendedor] = (statsEtiquetas[etiquetaVendedor] || 0) + 1;
     });
 
-    // 5️⃣ Retorna resultado
+    // 5️⃣ Formata resumo das conversas para cada cliente
+    const clientesResumo = clientes.map(c => ({
+      nome: c.nome,
+      empresa: c.empresa,
+      telefone: c.phone_number,
+      cidade: c.cidade || "Não informado",
+      tipo_midia: c.tipo_midia || "Não informado",
+      periodo: c.periodo || "Não informado",
+      orcamento: c.orcamento || "Não informado",
+      data_cadastro: c.created_at,
+      vendedor: c.vendedores?.nome || "Desconhecido",
+      etiqueta: c.vendedores?.etiqueta_whatsapp || "Sem etiqueta"
+    }));
+
+    // 6️⃣ Retorna resultado
     return res.status(200).json({
       totalClientes: clientes.length,
       statsVendedores,
       statsEtiquetas,
-      clientes,
+      clientes: clientesResumo,
       mensagem: "Relatório gerado com sucesso"
     });
 
