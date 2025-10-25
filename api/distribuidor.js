@@ -11,28 +11,34 @@ try {
 export default async function handler(req, res) {
   console.log("🔹 Início da função distribuidor", { method: req.method });
 
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Método não permitido" });
-  }
+  if (req.method !== "POST") return res.status(405).json({ error: "Método não permitido" });
 
   try {
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_KEY;
 
-    if (!supabaseUrl || !supabaseKey) {
-      return res.status(500).json({ error: "Configuração do Supabase ausente" });
-    }
+    if (!supabaseUrl || !supabaseKey) return res.status(500).json({ error: "Configuração do Supabase ausente" });
 
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Lê body
+    // Lê body enviado pelo Webhook Universal Zaia
     let body = req.body;
     if (!body || Object.keys(body).length === 0) {
       try { body = JSON.parse(req.body); } 
       catch { return res.status(400).json({ error: "Body inválido" }); }
     }
 
-    const { phone_number, nome, empresa, cidade, tipo_midia, periodo, orcamento, mensagens } = body;
+    // Zaia envia os dados dentro de "eventData", mapeie para o seu modelo
+    const eventData = body?.eventData || body;
+    const phone_number = eventData.phone_number || eventData.from || eventData.sender;
+    const nome = eventData.nome || eventData.name || "Cliente";
+    const empresa = eventData.empresa || "Não informado";
+    const cidade = eventData.cidade || "Não informado";
+    const tipo_midia = eventData.tipo_midia || null;
+    const periodo = eventData.periodo || null;
+    const orcamento = eventData.orcamento || null;
+    const mensagens = eventData.mensagens || (eventData.text ? [{ text: eventData.text, origem: "cliente" }] : []);
+
     if (!phone_number) return res.status(400).json({ error: "Número de telefone obrigatório" });
     if (!nome) return res.status(400).json({ error: "Nome do cliente obrigatório" });
     if (!empresa) return res.status(400).json({ error: "Nome da empresa obrigatório" });
