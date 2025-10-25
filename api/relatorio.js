@@ -32,7 +32,7 @@ export default async function handler(req, res) {
         tipo_midia,
         periodo,
         orcamento,
-        created_at,
+        criado_em,
         vendedor_id,
         vendedores!inner(nome, etiqueta_whatsapp)
       `);
@@ -40,11 +40,11 @@ export default async function handler(req, res) {
     // 2️⃣ Aplica filtros
     if (vendedor_id) query = query.eq("vendedor_id", parseInt(vendedor_id));
     if (etiqueta) query = query.ilike("vendedores.etiqueta_whatsapp", `%${etiqueta}%`);
-    if (data_inicio) query = query.gte("created_at", new Date(data_inicio).toISOString());
-    if (data_fim) query = query.lte("created_at", new Date(data_fim).toISOString());
+    if (data_inicio) query = query.gte("criado_em", new Date(data_inicio).toISOString());
+    if (data_fim) query = query.lte("criado_em", new Date(data_fim).toISOString());
 
     // 3️⃣ Executa query
-    const { data: clientes, error } = await query.order("created_at", { ascending: false });
+    const { data: clientes, error } = await query.order("criado_em", { ascending: false });
     if (error) throw error;
 
     // 4️⃣ Calcula estatísticas por vendedor e etiqueta
@@ -68,7 +68,7 @@ export default async function handler(req, res) {
       tipo_midia: c.tipo_midia || "Não informado",
       periodo: c.periodo || "Não informado",
       orcamento: c.orcamento || "Não informado",
-      data_cadastro: c.created_at,
+      data_cadastro: c.criado_em,
       vendedor: c.vendedores?.nome || "Desconhecido",
       etiqueta: c.vendedores?.etiqueta_whatsapp || "Sem etiqueta"
     }));
