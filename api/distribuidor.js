@@ -8,10 +8,8 @@ export default async function handler(req, res) {
   }
 
   try {
-    // 1️⃣ Cria cliente Supabase
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_KEY;
-
     if (!supabaseUrl || !supabaseKey) {
       console.error("❌ Variáveis de ambiente do Supabase faltando!");
       return res.status(500).json({ error: "Configuração do Supabase ausente" });
@@ -19,7 +17,7 @@ export default async function handler(req, res) {
 
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // 2️⃣ Lê o body corretamente
+    // Lê body
     let body = req.body;
     if (!body || Object.keys(body).length === 0) {
       try {
@@ -30,16 +28,25 @@ export default async function handler(req, res) {
       }
     }
 
-    const { phone_number, nome } = body;
+    // Variáveis do lead
+    const { phone_number, nome, empresa, cidade, tipo_midia, periodo, orcamento } = body;
     if (!phone_number) {
       console.error("❌ Número de telefone não informado!");
       return res.status(400).json({ error: "Número de telefone obrigatório" });
     }
+    if (!nome) {
+      console.error("❌ Nome do cliente não informado!");
+      return res.status(400).json({ error: "Nome do cliente obrigatório" });
+    }
+    if (!empresa) {
+      console.error("❌ Nome da empresa não informado!");
+      return res.status(400).json({ error: "Nome da empresa obrigatório" });
+    }
 
-    // 3️⃣ Verifica se o cliente já existe
+    // Verifica se o cliente já existe
     const { data: existing } = await supabase
       .from("clientes")
-      .select("*, vendedores(nome, etiqueta_whatsapp) as vendedor")
+      .select("*, vendedores(nome, etiqueta_whatsapp, whatsapp) as vendedor")
       .eq("phone_number", phone_number)
       .single();
 
@@ -53,7 +60,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // 4️⃣ Busca todos os vendedores ativos
+    // Busca todos os vendedores ativos
     const { data: vendedores } = await supabase
       .from("vendedores")
       .select("*")
@@ -64,23 +71,32 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "Nenhum vendedor ativo encontrado" });
     }
 
-    // 5️⃣ Pega índice da roleta
+    // Pega índice da roleta
     const { data: config } = await supabase.from("config").select("*").eq("id", 1).single();
     let index = config?.ultimo_vendedor_index ?? 0;
 
-    // 6️⃣ Escolhe vendedor da roleta
+    // Escolhe vendedor da roleta
     const vendedorEscolhido = vendedores[index % vendedores.length];
 
-    // 7️⃣ Atualiza índice da roleta
+    // Atualiza índice da roleta
     await supabase.from("config").update({
       ultimo_vendedor_index: (index + 1) % vendedores.length,
       atualizado_em: new Date()
     }).eq("id", 1);
 
-    // 8️⃣ Insere novo cliente
+    // Insere novo cliente
     const { data: novoCliente, error: insertError } = await supabase
       .from("clientes")
-      .insert([{ nome: nome || "Sem nome", phone_number, vendedor_id: vendedorEscolhido.id }])
+      .insert([{
+        nome,
+        empresa,
+        phone_number,
+        cidade,
+        tipo_midia,
+        periodo,
+        orcamento,
+        vendedor_id: vendedorEscolhido.id
+      }])
       .select();
 
     if (insertError) throw insertError;
@@ -92,9 +108,24 @@ export default async function handler(req, res) {
       etiqueta_whatsapp: vendedorEscolhido.etiqueta_whatsapp,
     });
 
-    // 9️⃣ Aplica etiqueta WhatsApp via API Zaia (fetch nativo)
+    // Monta mensagem resumida para o vendedor
+    const mensagemResumo = `
+🚀 Novo lead qualificado!
+
+Nome: ${nome}
+Empresa: ${empresa}
+Resumo da conversa:
+- Cidade: ${cidade || "Não informado"}
+- Telefone: ${phone_number}
+- Tipo de mídia: ${tipo_midia || "Não informado"}
+- Período: ${periodo || "Não informado"}
+- Orçamento: ${orcamento || "Não informado"}
+`;
+
+    // Aplica etiqueta WhatsApp via API Zaia e envia mensagem resumida
     try {
-      const response = await fetch(`${process.env.ZAIA_API_URL}/contacts/tag`, {
+      // Aplica etiqueta
+      await fetch(`${process.env.ZAIA_API_URL}/contacts/tag`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${process.env.ZAIA_TOKEN}`,
@@ -106,19 +137,32 @@ export default async function handler(req, res) {
         })
       });
 
-      const result = await response.json();
-      console.log("📌 Etiqueta aplicada no WhatsApp:", result);
+      // Envia mensagem resumida ao vendedor
+      await fetch(`${process.env.ZAIA_API_URL}/messages/send`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.ZAIA_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          to: vendedorEscolhido.whatsapp || vendedorEscolhido.phone_number,
+          type: "text",
+          text: mensagemResumo
+        })
+      });
+
+      console.log("📌 Lead enviado com resumo padronizado ao vendedor");
     } catch (err) {
-      console.error("⚠️ Falha ao aplicar etiqueta no WhatsApp:", err);
+      console.error("⚠️ Falha ao aplicar etiqueta ou enviar mensagem ao vendedor:", err);
     }
 
-    // 10️⃣ Retorna sucesso
+    // Retorna sucesso
     return res.status(200).json({
       tipo: "novo",
       vendedor_id: vendedorEscolhido.id,
       vendedor_nome: vendedorEscolhido.nome,
       etiqueta_whatsapp: vendedorEscolhido.etiqueta_whatsapp,
-      mensagem: `Novo cliente atribuído a ${vendedorEscolhido.nome} e etiqueta aplicada`
+      mensagem: `Novo cliente atribuído a ${vendedorEscolhido.nome} e resumo enviado`
     });
 
   } catch (err) {
