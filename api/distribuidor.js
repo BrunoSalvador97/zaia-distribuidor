@@ -28,7 +28,7 @@ export default async function handler(req, res) {
       catch { return res.status(400).json({ error: "Body inválido" }); }
     }
 
-    // Zaia envia os dados dentro de "eventData", mapeie para o seu modelo
+    // Zaia envia os dados dentro de "eventData"
     const eventData = body?.eventData || body;
     const phone_number = eventData.phone_number || eventData.from || eventData.sender;
     const nome = eventData.nome || eventData.name || "Cliente";
@@ -51,7 +51,7 @@ export default async function handler(req, res) {
       .single();
 
     if (existing) {
-      // Salva nova mensagem do lead, se enviada
+      // Salva mensagens do lead no histórico
       if (mensagens && Array.isArray(mensagens)) {
         for (let msg of mensagens) {
           await supabase.from("mensagens_leads").insert([{
@@ -85,7 +85,7 @@ export default async function handler(req, res) {
 
     const vendedorEscolhido = vendedores[index % vendedores.length];
 
-    // Atualiza índice
+    // Atualiza índice da roleta
     await supabase.from("config").update({
       ultimo_vendedor_index: (index + 1) % vendedores.length,
       atualizado_em: new Date()
@@ -104,7 +104,7 @@ export default async function handler(req, res) {
 
     const clienteId = novoCliente[0].id;
 
-    // Salva mensagens enviadas pelo lead (se houver)
+    // Salva mensagens enviadas pelo lead
     if (mensagens && Array.isArray(mensagens)) {
       for (let msg of mensagens) {
         await supabase.from("mensagens_leads").insert([{
@@ -129,8 +129,9 @@ Resumo da conversa:
 - Orçamento: ${orcamento || "Não informado"}
 `;
 
-    // Aplica etiqueta e envia mensagem via Zaia
+    // Envia pelo número principal da Zaia, mas para o vendedor correto
     try {
+      // Aplica etiqueta ao lead
       await fetchFunction(`${process.env.ZAIA_API_URL}/contacts/tag`, {
         method: "POST",
         headers: {
@@ -140,16 +141,21 @@ Resumo da conversa:
         body: JSON.stringify({ phone: phone_number, tag: vendedorEscolhido.etiqueta_whatsapp })
       });
 
+      // Envia mensagem para o vendedor pelo número principal
       await fetchFunction(`${process.env.ZAIA_API_URL}/messages/send`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${process.env.ZAIA_TOKEN}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ to: vendedorEscolhido.telefone || vendedorEscolhido.whatsapp, type: "text", text: mensagemResumo })
+        body: JSON.stringify({ 
+          to: vendedorEscolhido.telefone,  // destinatário
+          type: "text", 
+          text: mensagemResumo 
+        })
       });
 
-      console.log("📌 Lead enviado com resumo padronizado ao vendedor");
+      console.log("📌 Lead enviado via número principal ao vendedor correto");
     } catch (err) {
       console.error("⚠️ Falha ao aplicar etiqueta ou enviar mensagem:", err);
     }
