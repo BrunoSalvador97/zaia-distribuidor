@@ -20,7 +20,7 @@ export default async function handler(req, res) {
 
     const { vendedor_id, etiqueta, data_inicio, data_fim } = req.query;
 
-    // 1️⃣ Monta query básica
+    // Query incluindo histórico de mensagens
     let query = supabase
       .from("clientes")
       .select(`
@@ -34,32 +34,31 @@ export default async function handler(req, res) {
         orcamento,
         criado_em,
         vendedor_id,
-        vendedores!inner(nome, etiqueta_whatsapp)
+        vendedores!inner(nome, etiqueta_whatsapp),
+        mensagens_leads(*)
       `);
 
-    // 2️⃣ Aplica filtros
+    // Aplica filtros
     if (vendedor_id) query = query.eq("vendedor_id", parseInt(vendedor_id));
     if (etiqueta) query = query.ilike("vendedores.etiqueta_whatsapp", `%${etiqueta}%`);
     if (data_inicio) query = query.gte("criado_em", new Date(data_inicio).toISOString());
     if (data_fim) query = query.lte("criado_em", new Date(data_fim).toISOString());
 
-    // 3️⃣ Executa query
+    // Executa query
     const { data: clientes, error } = await query.order("criado_em", { ascending: false });
     if (error) throw error;
 
-    // 4️⃣ Calcula estatísticas por vendedor e etiqueta
+    // Estatísticas por vendedor e etiqueta
     const statsVendedores = {};
     const statsEtiquetas = {};
-
     clientes.forEach(c => {
       const nomeVendedor = c.vendedores?.nome || "Desconhecido";
       const etiquetaVendedor = c.vendedores?.etiqueta_whatsapp || "Sem etiqueta";
-
       statsVendedores[nomeVendedor] = (statsVendedores[nomeVendedor] || 0) + 1;
       statsEtiquetas[etiquetaVendedor] = (statsEtiquetas[etiquetaVendedor] || 0) + 1;
     });
 
-    // 5️⃣ Formata resumo das conversas para cada cliente
+    // Resumo dos clientes com histórico de mensagens
     const clientesResumo = clientes.map(c => ({
       nome: c.nome,
       empresa: c.empresa,
@@ -70,10 +69,13 @@ export default async function handler(req, res) {
       orcamento: c.orcamento || "Não informado",
       data_cadastro: c.criado_em,
       vendedor: c.vendedores?.nome || "Desconhecido",
-      etiqueta: c.vendedores?.etiqueta_whatsapp || "Sem etiqueta"
+      etiqueta: c.vendedores?.etiqueta_whatsapp || "Sem etiqueta",
+      conversas: c.mensagens_leads?.map(m => ({
+        mensagem: m.mensagem,
+        timestamp: m.criado_em
+      })) || []
     }));
 
-    // 6️⃣ Retorna resultado
     return res.status(200).json({
       totalClientes: clientes.length,
       statsVendedores,
