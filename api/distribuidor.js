@@ -1,7 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
+import fetch from "node-fetch";
 
 export default async function handler(req, res) {
-  console.log("🔹 Início da função distribuidor", { method: req.method });
+  console.log("🔹 Início da função distribuidor (realtime)", { method: req.method });
 
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Método não permitido" });
@@ -10,9 +11,12 @@ export default async function handler(req, res) {
   try {
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_KEY;
-    if (!supabaseUrl || !supabaseKey) {
-      console.error("❌ Variáveis de ambiente do Supabase faltando!");
-      return res.status(500).json({ error: "Configuração do Supabase ausente" });
+    const zaiaToken = process.env.ZAIA_TOKEN;
+    const zaiaApi = process.env.ZAIA_API_URL;
+
+    if (!supabaseUrl || !supabaseKey || !zaiaToken || !zaiaApi) {
+      console.error("❌ Variáveis de ambiente faltando!");
+      return res.status(500).json({ error: "Configuração ausente" });
     }
 
     const supabase = createClient(supabaseUrl, supabaseKey);
@@ -28,19 +32,15 @@ export default async function handler(req, res) {
       }
     }
 
-    // Variáveis do lead
-    const { phone_number, nome, empresa, cidade, tipo_midia, periodo, orcamento } = body;
-    if (!phone_number) {
-      console.error("❌ Número de telefone não informado!");
-      return res.status(400).json({ error: "Número de telefone obrigatório" });
-    }
-    if (!nome) {
-      console.error("❌ Nome do cliente não informado!");
-      return res.status(400).json({ error: "Nome do cliente obrigatório" });
-    }
-    if (!empresa) {
-      console.error("❌ Nome da empresa não informado!");
-      return res.status(400).json({ error: "Nome da empresa obrigatório" });
+    // Extrai informações do lead do body enviado pelo fluxo Zaia
+    const { usuario, empresa, localizacao, tipo_midia, periodo, orcamento } = body;
+    const phone_number = usuario?.telefone;
+    const nome = usuario?.nome;
+    const cidade = localizacao?.cidade || "Não informado";
+
+    if (!phone_number || !nome || !empresa) {
+      console.error("❌ Dados obrigatórios faltando!", { phone_number, nome, empresa });
+      return res.status(400).json({ error: "Dados obrigatórios faltando" });
     }
 
     // Verifica se o cliente já existe
@@ -56,7 +56,7 @@ export default async function handler(req, res) {
         tipo: "antigo",
         vendedor_id: existing.vendedor_id,
         vendedor_nome: existing.vendedor?.nome || "Desconhecido",
-        mensagem: `Cliente antigo redirecionado para ${existing.vendedor?.nome || "vendedor"}`,
+        mensagem: `Cliente antigo redirecionado para ${existing.vendedor?.nome || "vendedor"}`
       });
     }
 
@@ -75,7 +75,6 @@ export default async function handler(req, res) {
     const { data: config } = await supabase.from("config").select("*").eq("id", 1).single();
     let index = config?.ultimo_vendedor_index ?? 0;
 
-    // Escolhe vendedor da roleta
     const vendedorEscolhido = vendedores[index % vendedores.length];
 
     // Atualiza índice da roleta
@@ -105,30 +104,29 @@ export default async function handler(req, res) {
       nome_cliente: nome,
       vendedor_id: vendedorEscolhido.id,
       vendedor_nome: vendedorEscolhido.nome,
-      etiqueta_whatsapp: vendedorEscolhido.etiqueta_whatsapp,
+      etiqueta_whatsapp: vendedorEscolhido.etiqueta_whatsapp
     });
 
-    // Monta mensagem resumida para o vendedor
+    // Monta mensagem resumida
     const mensagemResumo = `
 🚀 Novo lead qualificado!
 
 Nome: ${nome}
 Empresa: ${empresa}
 Resumo da conversa:
-- Cidade: ${cidade || "Não informado"}
+- Cidade: ${cidade}
 - Telefone: ${phone_number}
 - Tipo de mídia: ${tipo_midia || "Não informado"}
 - Período: ${periodo || "Não informado"}
 - Orçamento: ${orcamento || "Não informado"}
 `;
 
-    // Aplica etiqueta WhatsApp via API Zaia e envia mensagem resumida
+    // Aplica etiqueta e envia mensagem
     try {
-      // Aplica etiqueta
-      await fetch(`${process.env.ZAIA_API_URL}/contacts/tag`, {
+      await fetch(`${zaiaApi}/contacts/tag`, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${process.env.ZAIA_TOKEN}`,
+          "Authorization": `Bearer ${zaiaToken}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
@@ -137,11 +135,10 @@ Resumo da conversa:
         })
       });
 
-      // Envia mensagem resumida ao vendedor
-      await fetch(`${process.env.ZAIA_API_URL}/messages/send`, {
+      await fetch(`${zaiaApi}/messages/send`, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${process.env.ZAIA_TOKEN}`,
+          "Authorization": `Bearer ${zaiaToken}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
@@ -153,10 +150,9 @@ Resumo da conversa:
 
       console.log("📌 Lead enviado com resumo padronizado ao vendedor");
     } catch (err) {
-      console.error("⚠️ Falha ao aplicar etiqueta ou enviar mensagem ao vendedor:", err);
+      console.error("⚠️ Falha ao aplicar etiqueta ou enviar mensagem:", err);
     }
 
-    // Retorna sucesso
     return res.status(200).json({
       tipo: "novo",
       vendedor_id: vendedorEscolhido.id,
