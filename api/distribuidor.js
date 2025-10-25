@@ -17,15 +17,19 @@ export default async function handler(req, res) {
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_KEY;
 
-    if (!supabaseUrl || !supabaseKey) return res.status(500).json({ error: "Configuração do Supabase ausente" });
+    if (!supabaseUrl || !supabaseKey)
+      return res.status(500).json({ error: "Configuração do Supabase ausente" });
 
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     // Lê body enviado pelo Webhook Universal Zaia
     let body = req.body;
     if (!body || Object.keys(body).length === 0) {
-      try { body = JSON.parse(req.body); } 
-      catch { return res.status(400).json({ error: "Body inválido" }); }
+      try {
+        body = JSON.parse(req.body);
+      } catch {
+        return res.status(400).json({ error: "Body inválido" });
+      }
     }
 
     // Zaia envia os dados dentro de "eventData"
@@ -43,10 +47,10 @@ export default async function handler(req, res) {
     if (!nome) return res.status(400).json({ error: "Nome do cliente obrigatório" });
     if (!empresa) return res.status(400).json({ error: "Nome da empresa obrigatório" });
 
-    // Verifica cliente existente
+    // ✅ Correção da relação com a tabela vendedores
     const { data: existing } = await supabase
       .from("clientes")
-      .select("*, vendedores(nome, etiqueta_whatsapp, telefone) as vendedor")
+      .select("*, vendedor:vendedor_id(nome, etiqueta_whatsapp, telefone)")
       .eq("phone_number", phone_number)
       .single();
 
@@ -60,6 +64,36 @@ export default async function handler(req, res) {
             origem: msg.origem || "cliente"
           }]);
         }
+      }
+
+      // ✅ Envia novamente a mensagem resumida ao vendedor original
+      const mensagemResumo = `
+📞 Lead retornou ao atendimento!
+
+Nome: ${nome}
+Empresa: ${empresa}
+Telefone: ${phone_number}
+Cidade: ${cidade || "Não informado"}
+Última mensagem: ${mensagens?.[0]?.text || "Sem mensagem recente"}
+`;
+
+      try {
+        await fetchFunction(`${process.env.ZAIA_API_URL}/messages/send`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${process.env.ZAIA_TOKEN}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            to: existing.vendedor?.telefone,
+            type: "text",
+            text: mensagemResumo
+          })
+        });
+
+        console.log("📩 Mensagem enviada ao vendedor original.");
+      } catch (err) {
+        console.error("⚠️ Falha ao enviar mensagem do cliente antigo:", err);
       }
 
       return res.status(200).json({
@@ -77,7 +111,8 @@ export default async function handler(req, res) {
       .eq("ativo", true)
       .order("id", { ascending: true });
 
-    if (!vendedores || vendedores.length === 0) return res.status(500).json({ error: "Nenhum vendedor ativo encontrado" });
+    if (!vendedores || vendedores.length === 0)
+      return res.status(500).json({ error: "Nenhum vendedor ativo encontrado" });
 
     // Índice da roleta
     const { data: config } = await supabase.from("config").select("*").eq("id", 1).single();
@@ -148,10 +183,10 @@ Resumo da conversa:
           "Authorization": `Bearer ${process.env.ZAIA_TOKEN}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ 
-          to: vendedorEscolhido.telefone,  // destinatário
-          type: "text", 
-          text: mensagemResumo 
+        body: JSON.stringify({
+          to: vendedorEscolhido.telefone,
+          type: "text",
+          text: mensagemResumo
         })
       });
 
