@@ -1,17 +1,20 @@
 import { createClient } from "@supabase/supabase-js";
 
-// 1. Inicialização do Supabase fora do handler para reutilização de conexão (Warm Start)
+// =========================================
+// 1. Inicialização do Supabase
+// =========================================
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 
 if (!supabaseUrl || !supabaseKey) {
-  console.error("Configuração do Supabase ausente. Verifique as variáveis de ambiente.");
-  // Em um ambiente Vercel, isto deve ser tratado na construção, mas é uma boa verificação.
+  console.error("⚠️ Configuração do Supabase ausente. Verifique as variáveis de ambiente.");
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// 2. Função auxiliar para chamadas à API Zaia com melhor tratamento de erro
+// =========================================
+// 2. Função auxiliar para chamadas à API Zaia
+// =========================================
 async function callZaiaApi(endpoint, body) {
   const url = `${process.env.ZAIA_API_URL}${endpoint}`;
   const response = await fetch(url, {
@@ -31,181 +34,165 @@ async function callZaiaApi(endpoint, body) {
   return response.json();
 }
 
+// =========================================
+// 3. Função principal - Distribuidor
+// =========================================
 export default async function handler(req, res) {
   console.log("🔹 Início da função distribuidor", { method: req.method });
 
-  if (req.method !== "POST") return res.status(405).json({ error: "Método não permitido" });
-
-  // 3. Verifica se a conexão com Supabase está configurada
-  if (!supabaseUrl || !supabaseKey) {
-    return res.status(500).json({ error: "Configuração do Supabase ausente" });
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Método não permitido" });
   }
 
   try {
-    // 4. Simplificação do parsing do body (confiando no Vercel/Next.js)
     const body = req.body;
     if (!body || Object.keys(body).length === 0) {
-      // Se o body estiver vazio por algum motivo, retorna erro.
       return res.status(400).json({ error: "Body inválido ou vazio" });
     }
 
-    // Mapeamento de dados do Zaia
+    // ==============================
+    // MAPEAMENTO DE DADOS DO ZAIA
+    // ==============================
     const eventData = body?.eventData || body;
+
     const phone_number = eventData.phone_number || eventData.from || eventData.sender;
-    const nome = eventData.nome || eventData.name || "Cliente";
+    const nome = eventData.nome || "Cliente";
     const empresa = eventData.empresa || "Não informado";
     const cidade = eventData.cidade || "Não informado";
-    const tipo_midia = eventData.tipo_midia || null;
-    const periodo = eventData.periodo || null;
-    const orcamento = eventData.orcamento || null;
-    const mensagens = eventData.mensagens || (eventData.text ? [{ text: eventData.text, origem: "cliente" }] : []);
+    const tipo_midia = eventData.tipo_midia || "Não informado";
+    const periodo = eventData.periodo || "Não informado";
+    const orcamento = eventData.orcamento || "Não informado";
 
-    // Validações
-    if (!phone_number) return res.status(400).json({ error: "Número de telefone obrigatório" });
-    // As validações de nome e empresa (Linhas 47-49) podem ser removidas se o Zaia garantir esses dados
-    // ou se o valor "Não informado" for aceitável.
+    if (!phone_number) {
+      return res.status(400).json({ error: "Número de telefone obrigatório" });
+    }
 
-    // ------------------------------------------------------------------------------------------------
-    // LÓGICA DE CLIENTE EXISTENTE
-    // ------------------------------------------------------------------------------------------------
-
+    // =============================================
+    // VERIFICA SE É CLIENTE EXISTENTE
+    // =============================================
     const { data: existing, error: fetchError } = await supabase
       .from("clientes")
       .select("*, vendedor:vendedor_id(nome, etiqueta_whatsapp, telefone)")
       .eq("phone_number", phone_number)
       .single();
 
-    if (fetchError && fetchError.code !== 'PGRST116') { // PGRST116 = Nenhum resultado encontrado (OK)
-        throw fetchError;
-    }
+    if (fetchError && fetchError.code !== "PGRST116") throw fetchError;
 
     if (existing) {
-      // Salva mensagens do lead no histórico
-      if (mensagens && Array.isArray(mensagens)) {
-        const messagesToInsert = mensagens.map(msg => ({
-            cliente_id: existing.id,
-            mensagem: msg.text,
-            origem: msg.origem || "cliente"
-        }));
-        // Otimização: Inserção em lote
-        await supabase.from("mensagens_leads").insert(messagesToInsert);
-      }
-
-      // Envia mensagem resumida ao vendedor original
       const mensagemResumo = `
 📞 Lead retornou ao atendimento!
 
 Nome: ${nome}
 Empresa: ${empresa}
 Telefone: ${phone_number}
-Cidade: ${cidade || "Não informado"}
-Última mensagem: ${mensagens?.[0]?.text || "Sem mensagem recente"}
+Cidade: ${cidade}
+Tipo de mídia: ${tipo_midia}
+Período: ${periodo}
+Orçamento: ${orcamento}
 `;
 
       try {
         await callZaiaApi("/messages/send", {
-            to: existing.vendedor?.telefone,
-            type: "text",
-            text: mensagemResumo
+          to: existing.vendedor?.telefone,
+          type: "text",
+          text: mensagemResumo
         });
-        console.log("📩 Mensagem enviada ao vendedor original.");
+        console.log(`📩 Lead antigo redirecionado para ${existing.vendedor?.nome}`);
       } catch (err) {
-        console.error("⚠️ Falha ao enviar mensagem do cliente antigo:", err.stack);
+        console.error("⚠️ Falha ao notificar vendedor do lead antigo:", err.message);
       }
 
       return res.status(200).json({
         tipo: "antigo",
         vendedor_id: existing.vendedor_id,
         vendedor_nome: existing.vendedor?.nome || "Desconhecido",
-        mensagem: `Cliente antigo redirecionado para ${existing.vendedor?.nome || "vendedor"}`
+        mensagem: `Cliente antigo redirecionado para ${existing.vendedor?.nome}`
       });
     }
 
-    // ------------------------------------------------------------------------------------------------
-    // LÓGICA DE NOVO CLIENTE (ROUND-ROBIN)
-    // ------------------------------------------------------------------------------------------------
-
-    // Busca vendedores ativos e configuração de índice em paralelo (Otimização)
+    // =============================================
+    // NOVO CLIENTE - ROUND ROBIN
+    // =============================================
     const [
       { data: vendedores, error: vendError },
       { data: config, error: configError }
     ] = await Promise.all([
-      supabase.from("vendedores").select("id, nome, etiqueta_whatsapp, telefone").eq("ativo", true).order("id", { ascending: true }),
+      supabase
+        .from("vendedores")
+        .select("id, nome, etiqueta_whatsapp, telefone")
+        .eq("ativo", true)
+        .order("id", { ascending: true }),
       supabase.from("config").select("ultimo_vendedor_index").eq("id", 1).single()
     ]);
 
     if (vendError) throw vendError;
-    if (configError && configError.code !== 'PGRST116') throw configError;
+    if (configError && configError.code !== "PGRST116") throw configError;
 
-    if (!vendedores || vendedores.length === 0)
+    if (!vendedores || vendedores.length === 0) {
       return res.status(500).json({ error: "Nenhum vendedor ativo encontrado" });
+    }
 
     let index = config?.ultimo_vendedor_index ?? 0;
     const vendedorEscolhido = vendedores[index % vendedores.length];
 
-    // Atualiza índice da roleta
-    await supabase.from("config").update({
-      ultimo_vendedor_index: (index + 1) % vendedores.length,
-      atualizado_em: new Date().toISOString()
-    }).eq("id", 1);
+    await supabase
+      .from("config")
+      .update({
+        ultimo_vendedor_index: (index + 1) % vendedores.length,
+        atualizado_em: new Date().toISOString()
+      })
+      .eq("id", 1);
 
-    // Insere novo cliente
     const { data: novoCliente, error: insertError } = await supabase
       .from("clientes")
       .insert([{
-        nome, empresa, phone_number, cidade, tipo_midia, periodo, orcamento,
+        nome,
+        empresa,
+        phone_number,
+        cidade,
+        tipo_midia,
+        periodo,
+        orcamento,
         vendedor_id: vendedorEscolhido.id
       }])
       .select("id")
-      .single(); // Otimização: usar single() se espera apenas um resultado
+      .single();
 
     if (insertError) throw insertError;
 
-    const clienteId = novoCliente.id;
-
-    // Salva mensagens enviadas pelo lead (Otimização: Inserção em lote)
-    if (mensagens && Array.isArray(mensagens)) {
-        const messagesToInsert = mensagens.map(msg => ({
-            cliente_id: clienteId,
-            mensagem: msg.text,
-            origem: msg.origem || "cliente"
-        }));
-        await supabase.from("mensagens_leads").insert(messagesToInsert);
-    }
-
-    // Monta mensagem resumida
+    // =============================================
+    // MENSAGEM DE RESUMO (SEM HISTÓRICO)
+    // =============================================
     const mensagemResumo = `
 🚀 Novo lead qualificado!
 
 Vendedor: ${vendedorEscolhido.nome}
 Nome: ${nome}
 Empresa: ${empresa}
-Resumo da conversa:
-- Cidade: ${cidade || "Não informado"}
+Resumo do pré-atendimento:
+- Cidade: ${cidade}
 - Telefone: ${phone_number}
-- Tipo de mídia: ${tipo_midia || "Não informado"}
-- Período: ${periodo || "Não informado"}
-- Orçamento: ${orcamento || "Não informado"}
+- Tipo de mídia: ${tipo_midia}
+- Período: ${periodo}
+- Orçamento: ${orcamento}
 `;
 
-    // Envia pelo número principal da Zaia
     try {
-      // Aplica etiqueta ao lead
+      // Aplica etiqueta e envia resumo
       await callZaiaApi("/contacts/tag", {
-          phone: phone_number,
-          tag: vendedorEscolhido.etiqueta_whatsapp
+        phone: phone_number,
+        tag: vendedorEscolhido.etiqueta_whatsapp
       });
 
-      // Envia mensagem para o vendedor pelo número principal
       await callZaiaApi("/messages/send", {
-          to: vendedorEscolhido.telefone,
-          type: "text",
-          text: mensagemResumo
+        to: vendedorEscolhido.telefone,
+        type: "text",
+        text: mensagemResumo
       });
 
-      console.log("📌 Lead enviado via número principal ao vendedor correto");
+      console.log(`📌 Lead enviado ao vendedor ${vendedorEscolhido.nome}`);
     } catch (err) {
-      console.error("⚠️ Falha ao aplicar etiqueta ou enviar mensagem:", err.stack);
+      console.error("⚠️ Falha ao enviar resumo ou aplicar etiqueta:", err.message);
     }
 
     return res.status(200).json({
@@ -213,7 +200,7 @@ Resumo da conversa:
       vendedor_id: vendedorEscolhido.id,
       vendedor_nome: vendedorEscolhido.nome,
       etiqueta_whatsapp: vendedorEscolhido.etiqueta_whatsapp,
-      mensagem: `Novo cliente atribuído a ${vendedorEscolhido.nome} e resumo enviado`
+      mensagem: `Novo lead atribuído a ${vendedorEscolhido.nome} e resumo enviado.`
     });
 
   } catch (err) {
