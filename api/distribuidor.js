@@ -15,8 +15,8 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 // =========================================
 // 2. Função auxiliar para chamadas à API Zaia (WhatsApp Business Oficial)
 // =========================================
-async function callZaiaApi(endpoint, body) {
-  const url = `${process.env.ZAIA_API_URL}${endpoint}`;
+async function callZaiaApi(body) {
+  const url = `${process.env.ZAIA_API_URL}/whatsapp-business/messages`; // endpoint correto
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -28,7 +28,7 @@ async function callZaiaApi(endpoint, body) {
 
   if (!response.ok) {
     const errorBody = await response.text();
-    throw new Error(`Falha na API Zaia (Status: ${response.status}) para ${endpoint}: ${errorBody}`);
+    throw new Error(`Falha na API Zaia (Status: ${response.status}): ${errorBody}`);
   }
 
   return response.json();
@@ -54,7 +54,6 @@ export default async function handler(req, res) {
     // Mapeamento de dados do lead
     // ==============================
     const eventData = body?.eventData || body;
-
     const phone_number = eventData.phone_number || eventData.from || eventData.sender;
     const nome = eventData.nome || "Cliente";
     const empresa = eventData.empresa || "Não informado";
@@ -72,31 +71,20 @@ export default async function handler(req, res) {
     // =============================================
     const { data: existing, error: fetchError } = await supabase
       .from("clientes")
-      .select("*, vendedor:vendedor_id(nome, etiqueta_whatsapp, telefone)")
+      .select("*, vendedor:vendedor_id(nome, telefone)")
       .eq("phone_number", phone_number)
       .single();
 
     if (fetchError && fetchError.code !== "PGRST116") throw fetchError;
 
     if (existing) {
-      const mensagemResumo = `
-📞 Lead retornou ao atendimento!
+      const mensagemResumo = `📞 Lead retornou ao atendimento!\n\nNome: ${nome}\nEmpresa: ${empresa}\nTelefone: ${phone_number}\nCidade: ${cidade}\nTipo de mídia: ${tipo_midia}\nPeríodo: ${periodo}\nOrçamento: ${orcamento}`;
 
-Nome: ${nome}
-Empresa: ${empresa}
-Telefone: ${phone_number}
-Cidade: ${cidade}
-Tipo de mídia: ${tipo_midia}
-Período: ${periodo}
-Orçamento: ${orcamento}
-`;
-
-      // Envia resumo diretamente para o vendedor via WhatsApp Business Oficial
       try {
-        await callZaiaApi("/messages/send", {
+        await callZaiaApi({
           to: existing.vendedor?.telefone,
           type: "text",
-          text: mensagemResumo
+          text: { body: mensagemResumo }
         });
         console.log(`📩 Lead antigo redirecionado para ${existing.vendedor?.nome}`);
       } catch (err) {
@@ -120,7 +108,7 @@ Orçamento: ${orcamento}
     ] = await Promise.all([
       supabase
         .from("vendedores")
-        .select("id, nome, etiqueta_whatsapp, telefone")
+        .select("id, nome, telefone")
         .eq("ativo", true)
         .order("id", { ascending: true }),
       supabase.from("config").select("ultimo_vendedor_index").eq("id", 1).single()
@@ -138,10 +126,7 @@ Orçamento: ${orcamento}
 
     await supabase
       .from("config")
-      .update({
-        ultimo_vendedor_index: (index + 1) % vendedores.length,
-        atualizado_em: new Date().toISOString()
-      })
+      .update({ ultimo_vendedor_index: (index + 1) % vendedores.length, atualizado_em: new Date().toISOString() })
       .eq("id", 1);
 
     const { data: novoCliente, error: insertError } = await supabase
@@ -164,36 +149,13 @@ Orçamento: ${orcamento}
     // =============================================
     // Mensagem de resumo para o vendedor (WhatsApp Business Oficial)
     // =============================================
-    const mensagemResumo = `
-🚀 Novo lead qualificado!
+    const mensagemResumo = `🚀 Novo lead qualificado!\n\nVendedor: ${vendedorEscolhido.nome}\nNome: ${nome}\nEmpresa: ${empresa}\nCidade: ${cidade}\nTelefone: ${phone_number}\nTipo de mídia: ${tipo_midia}\nPeríodo: ${periodo}\nOrçamento: ${orcamento}`;
 
-Vendedor: ${vendedorEscolhido.nome}
-Nome: ${nome}
-Empresa: ${empresa}
-Resumo do pré-atendimento:
-- Cidade: ${cidade}
-- Telefone: ${phone_number}
-- Tipo de mídia: ${tipo_midia}
-- Período: ${periodo}
-- Orçamento: ${orcamento}
-`;
-
-    // Aplica etiqueta no contato (opcional, mas agora compatível com WhatsApp Business Oficial)
     try {
-      await callZaiaApi("/contacts/tag", {
-        phone: phone_number,
-        tag: vendedorEscolhido.etiqueta_whatsapp
-      });
-    } catch(err) {
-      console.warn("⚠️ Não foi possível aplicar etiqueta, ignorando:", err.message);
-    }
-
-    // Envia resumo sempre
-    try {
-      await callZaiaApi("/messages/send", {
+      await callZaiaApi({
         to: vendedorEscolhido.telefone,
         type: "text",
-        text: mensagemResumo
+        text: { body: mensagemResumo }
       });
       console.log(`📌 Lead enviado ao vendedor ${vendedorEscolhido.nome}`);
     } catch(err) {
@@ -204,7 +166,6 @@ Resumo do pré-atendimento:
       tipo: "novo",
       vendedor_id: vendedorEscolhido.id,
       vendedor_nome: vendedorEscolhido.nome,
-      etiqueta_whatsapp: vendedorEscolhido.etiqueta_whatsapp,
       mensagem: `Novo lead atribuído a ${vendedorEscolhido.nome} e resumo enviado.`
     });
 
