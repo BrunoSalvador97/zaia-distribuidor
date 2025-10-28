@@ -178,7 +178,14 @@ Resumo do pré-atendimento:
 `;
 
     try {
-      // Aplica etiqueta e envia resumo
+      // =============================================
+      // CRIA CONTATO, APLICA ETIQUETA E ENVIA RESUMO
+      // =============================================
+      await callZaiaApi("/contacts/create", {
+        phone: phone_number,
+        name: nome
+      });
+
       await callZaiaApi("/contacts/tag", {
         phone: phone_number,
         tag: vendedorEscolhido.etiqueta_whatsapp
@@ -192,7 +199,7 @@ Resumo do pré-atendimento:
 
       console.log(`📌 Lead enviado ao vendedor ${vendedorEscolhido.nome}`);
     } catch (err) {
-      console.error("⚠️ Falha ao enviar resumo ou aplicar etiqueta:", err.message);
+      console.error("⚠️ Falha ao criar contato, aplicar etiqueta ou enviar resumo:", err.message);
     }
 
     return res.status(200).json({
