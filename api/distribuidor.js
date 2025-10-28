@@ -68,7 +68,7 @@ export default async function handler(req, res) {
     }
 
     // =============================================
-    // VERIFICA SE É CLIENTE EXISTENTE
+    // CLIENTE EXISTENTE
     // =============================================
     const { data: existing, error: fetchError } = await supabase
       .from("clientes")
@@ -161,7 +161,7 @@ Orçamento: ${orcamento}
     if (insertError) throw insertError;
 
     // =============================================
-    // MENSAGEM DE RESUMO (SEM HISTÓRICO)
+    // MENSAGEM DE RESUMO (SEM CRIAR CONTATO)
     // =============================================
     const mensagemResumo = `
 🚀 Novo lead qualificado!
@@ -177,29 +177,26 @@ Resumo do pré-atendimento:
 - Orçamento: ${orcamento}
 `;
 
+    // Tenta aplicar etiqueta, mas não bloqueia se falhar
     try {
-      // =============================================
-      // CRIA CONTATO, APLICA ETIQUETA E ENVIA RESUMO
-      // =============================================
-      await callZaiaApi("/contacts/create", {
-        phone: phone_number,
-        name: nome
-      });
-
       await callZaiaApi("/contacts/tag", {
         phone: phone_number,
         tag: vendedorEscolhido.etiqueta_whatsapp
       });
+    } catch(err) {
+      console.warn("⚠️ Não foi possível aplicar etiqueta, ignorando:", err.message);
+    }
 
+    // Envia o resumo sempre
+    try {
       await callZaiaApi("/messages/send", {
         to: vendedorEscolhido.telefone,
         type: "text",
         text: mensagemResumo
       });
-
       console.log(`📌 Lead enviado ao vendedor ${vendedorEscolhido.nome}`);
-    } catch (err) {
-      console.error("⚠️ Falha ao criar contato, aplicar etiqueta ou enviar resumo:", err.message);
+    } catch(err) {
+      console.error("⚠️ Falha ao enviar resumo:", err.message);
     }
 
     return res.status(200).json({
