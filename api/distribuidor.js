@@ -13,7 +13,7 @@ if (!supabaseUrl || !supabaseKey) {
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // =========================================
-// 2. Função auxiliar para chamadas à API Zaia
+// 2. Função auxiliar para chamadas à API Zaia (WhatsApp Business Oficial)
 // =========================================
 async function callZaiaApi(endpoint, body) {
   const url = `${process.env.ZAIA_API_URL}${endpoint}`;
@@ -35,7 +35,7 @@ async function callZaiaApi(endpoint, body) {
 }
 
 // =========================================
-// 3. Função principal - Distribuidor
+// 3. Função principal - Distribuidor de leads
 // =========================================
 export default async function handler(req, res) {
   console.log("🔹 Início da função distribuidor", { method: req.method });
@@ -51,7 +51,7 @@ export default async function handler(req, res) {
     }
 
     // ==============================
-    // MAPEAMENTO DE DADOS DO ZAIA
+    // Mapeamento de dados do lead
     // ==============================
     const eventData = body?.eventData || body;
 
@@ -91,6 +91,7 @@ Período: ${periodo}
 Orçamento: ${orcamento}
 `;
 
+      // Envia resumo diretamente para o vendedor via WhatsApp Business Oficial
       try {
         await callZaiaApi("/messages/send", {
           to: existing.vendedor?.telefone,
@@ -161,7 +162,7 @@ Orçamento: ${orcamento}
     if (insertError) throw insertError;
 
     // =============================================
-    // MENSAGEM DE RESUMO (SEM CRIAR CONTATO)
+    // Mensagem de resumo para o vendedor (WhatsApp Business Oficial)
     // =============================================
     const mensagemResumo = `
 🚀 Novo lead qualificado!
@@ -177,7 +178,7 @@ Resumo do pré-atendimento:
 - Orçamento: ${orcamento}
 `;
 
-    // Tenta aplicar etiqueta, mas não bloqueia se falhar
+    // Aplica etiqueta no contato (opcional, mas agora compatível com WhatsApp Business Oficial)
     try {
       await callZaiaApi("/contacts/tag", {
         phone: phone_number,
@@ -187,7 +188,7 @@ Resumo do pré-atendimento:
       console.warn("⚠️ Não foi possível aplicar etiqueta, ignorando:", err.message);
     }
 
-    // Envia o resumo sempre
+    // Envia resumo sempre
     try {
       await callZaiaApi("/messages/send", {
         to: vendedorEscolhido.telefone,
